@@ -1,0 +1,20 @@
+[project]
+name = "serve"
+version = "0.1.0"
+description = "Minimal LLM inference"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "transformers",
+    "triton",
+]
+[project.optional-dependencies]
+test = [
+    "accelerate",
+]
+
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
