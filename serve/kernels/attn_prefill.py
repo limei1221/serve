@@ -317,9 +317,7 @@ def attn_prefill_triton(
 ) -> torch.Tensor:
     B = seqlens_k.shape[0]
     N, Hq, D = q.shape
-    Hq = model_config.n_heads
-    Hk = model_config.n_kv_heads
-    head_group_size = Hq // Hk
+    head_group_size = model_config.n_heads // model_config.n_kv_heads
     BLOCK_DMODEL = D
     q_start_ix = torch.cumsum(seqlens_k, dim=0) - seqlens_k
     # todo: don't use as many blocks with more careful grid launch + indexing

@@ -8,10 +8,9 @@ from serve.kv_cache_paged import KVCacheIndexPaged
 from serve.kv_cache_paged import BlockTableData
 
 assert torch.cuda.is_available()
-DEVICE = "cuda"
 COMPILE_DECODE = int(os.getenv("COMPILE_DECODE", 0)) == 1
 COMPILE_PREFILL = int(os.getenv("COMPILE_PREFILL", 0)) == 1
-MAX_ALLOWED_BATCH_SIZE = 2000
+MAX_ALLOWED_BATCH_SIZE = 4000
 
 
 @dataclass
@@ -116,6 +115,7 @@ def prefill(
 ):
     # todo: could make few % faster by more efficient setup
     # or overlapping disjoint prefills (don't need to wait for the last one)
+    DEVICE = f"cuda:{torch.distributed.get_rank()}" if torch.distributed.is_initialized() else "cuda"
 
     req_ids = [r.request_id for r in requests]
     req_lens = [r.input_length for r in requests]
@@ -168,6 +168,7 @@ def decode_one_token(
     kv_cache_ix: KVCacheIndexPaged,
     temperature: float,
 ):
+    DEVICE = model.device
     req_lens = [r.input_length + len(r.generated_tokens) for r in requests]
     req_ids = [r.request_id for r in requests]
 
@@ -240,9 +241,11 @@ def generate(
     temperature: float = 0.0,
     return_logits: bool = False,
 ) -> list[Request]:
+    device = f"cuda:{torch.distributed.get_rank()}" if torch.distributed.is_initialized() else "cuda"
+
     blocksize_k = 64
     if not model.kv_caches_init:
-        model.create_kv_cache(blocksize_k=blocksize_k, max_batch_size=MAX_ALLOWED_BATCH_SIZE)
+        model.create_kv_cache(blocksize_k=blocksize_k, max_batch_size=MAX_ALLOWED_BATCH_SIZE, device=device)
     kv_caches, kv_cache_ix, num_kv_blocks = model.kv_caches, model.kv_cache_ix, model.num_kv_blocks
 
     finished_requests: list[RequestData] = []
@@ -278,12 +281,12 @@ def generate(
         # todo: can these slices be slow? (with mega long list)
         current_step_requests, prefill_queue = prefill_queue[:num_requests_to_prefill], prefill_queue[num_requests_to_prefill:]
         if current_step_requests:
-            print(f"Prefilling {len(current_step_requests)} requests")
+            # print(f"Prefilling {len(current_step_requests)} requests")
             with torch.autograd.profiler.record_function("prefill"):
                 logits = prefill(model, current_step_requests, kv_caches, kv_cache_ix, temperature)
             decode_queue.extend(current_step_requests)
         else:
-            print(f"Decoding {len(decode_queue)} requests")
+            # print(f"Decoding {len(decode_queue)} requests")
             current_step_requests = decode_queue
             with torch.autograd.profiler.record_function("generate_next_token"):
                 logits = decode_one_token(model, current_step_requests, kv_caches, kv_cache_ix, temperature)

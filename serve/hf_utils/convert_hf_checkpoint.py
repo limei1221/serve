@@ -160,17 +160,14 @@ def convert_hf_checkpoint(
     print(f"Saving checkpoint to {checkpoint_dir / 'model.pth'}")
     torch.save(final_result, checkpoint_dir / "model.pth")
     if "llama-3-" in model_name.lower() or "llama-3.1-" in model_name.lower():
-        if "llama-3.1-405b" in model_name.lower():
-            original_dir = checkpoint_dir / "original" / "mp16"
-        else:
-            original_dir = checkpoint_dir / "original"
+        original_dir = checkpoint_dir / "original"
         tokenizer_model = original_dir / "tokenizer.model"
         tokenizer_model_tiktoken = checkpoint_dir / "tokenizer.model"
         print(f"Copying {tokenizer_model} to {tokenizer_model_tiktoken}")
         shutil.copy(tokenizer_model, tokenizer_model_tiktoken)
 
 
-def main(repo_id: str):
+def download_and_convert(repo_id: str):
     checkpoint_dir = Path(f"checkpoints/{repo_id}")
     hf_token = os.environ.get("HF_TOKEN")
     hf_download(repo_id, hf_token)
@@ -180,4 +177,4 @@ def main(repo_id: str):
 
 
 if __name__ == "__main__":
-    main("meta-llama/Llama-3.2-1B")
+    download_and_convert("meta-llama/Llama-3.2-1B")

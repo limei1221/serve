@@ -1,6 +1,5 @@
 # llama
 # Adapted from https://github.com/meta-llama/llama/blob/main/llama/model.py
-import os
 import math
 from dataclasses import dataclass
 from typing import Literal
@@ -8,13 +7,14 @@ from typing import Literal
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torch import distributed as dist
 
 from serve.kernels.cache_write import write_multiple_positions_triton, write_single_position_triton
 from serve.kernels.attn_decode import attn_decode_triton
 from serve.kernels.attn_prefill import attn_prefill_triton
 from serve.kv_cache_paged import BlockTableData, KVCacheIndexPaged
 
-DEVICE = "cuda"
+
 
 
 @dataclass
@@ -95,17 +95,21 @@ class LlamaAttention(nn.Module):
         self.wqkv = nn.Linear(config.dim, (self.n_heads + 2 * self.n_kv_heads) * self.head_dim, bias=False)
         self.rotary_emb = RotaryEmbedding()
         self.wo = nn.Linear(config.dim, config.dim, bias=False)
+        self.world_size = dist.get_world_size() if dist.is_initialized() else 1
+
+        self.n_local_heads = self.n_heads // self.world_size
+        self.n_local_kv_heads = self.n_kv_heads // self.world_size
 
     def forward(self, x: torch.Tensor, kv_cache: tuple[torch.Tensor, torch.Tensor], metadata: Metadata):
-        d = x.shape[-1]
         qkv = self.wqkv(x)
 
-        kv_hd = self.head_dim * self.n_kv_heads
-        q, k, v = qkv.split([d, kv_hd, kv_hd], dim=-1)
+        kv_hd = self.head_dim * self.n_local_kv_heads
+        q_hd = self.head_dim * self.n_local_heads
+        q, k, v = qkv.split([q_hd, kv_hd, kv_hd], dim=-1)
 
-        q = q.view(*x.shape[:-1], self.n_heads, self.head_dim)
-        k = k.view(*x.shape[:-1], self.n_kv_heads, self.head_dim)
-        v = v.view(*x.shape[:-1], self.n_kv_heads, self.head_dim)
+        q = q.view(*x.shape[:-1], self.n_local_heads, self.head_dim)
+        k = k.view(*x.shape[:-1], self.n_local_kv_heads, self.head_dim)
+        v = v.view(*x.shape[:-1], self.n_local_kv_heads, self.head_dim)
 
         if not metadata.is_prefill:
             q = q.transpose(1, 2)
@@ -125,7 +129,7 @@ class LlamaAttention(nn.Module):
 
         if not metadata.is_prefill:
             attn_out = attn_out.transpose(1, 2)
-        attn_out = attn_out.contiguous().view(*x.shape)
+        attn_out = attn_out.contiguous().view(*x.shape[:-1], -1)
         output = self.wo(attn_out)
         return output
 
@@ -153,7 +157,6 @@ class LlamaModel(nn.Module):
         self.tok_embeddings = nn.Embedding(config.vocab_size, config.dim)
         self.layers = nn.ModuleList([LlamaDecoderBlock(config) for _ in range(config.n_layers)])
         self.output = nn.Linear(config.dim, config.vocab_size, bias=False)
-        self.device = DEVICE
         self.dtype = dtype
         self.kv_caches_init = False
 
@@ -162,23 +165,23 @@ class LlamaModel(nn.Module):
             self.config.max_seq_len, self.config.dim // self.config.n_heads, base=self.config.rope_base, rope_scaling=self.config.rope_scaling
         ).to(self.device)
 
-    def create_kv_cache(self, blocksize_k: int, max_batch_size: int):
+    def create_kv_cache(self, blocksize_k: int, max_batch_size: int, device: str):
         available_memory = torch.cuda.mem_get_info()[0]
         block_size_memory = 2 * 2 * self.config.n_layers * blocksize_k * (self.config.dim // self.config.n_heads)
         # todo: improve this heuristic
-        num_kv_blocks = int((available_memory * 0.7) // block_size_memory)
+        num_kv_blocks = int((available_memory * 0.6) // block_size_memory)
         print(f"KV cache using {block_size_memory * num_kv_blocks / 1024**3:.2f}GB")
         print(f"allocating {num_kv_blocks} blocks, of size {block_size_memory / 1024**2:.2f}MB")
 
         kv_caches = [
             (
-                torch.empty(num_kv_blocks, blocksize_k, self.config.dim // self.config.n_heads, dtype=self.dtype, device=self.device),
-                torch.empty(num_kv_blocks, blocksize_k, self.config.dim // self.config.n_heads, dtype=self.dtype, device=self.device),
+                torch.empty(num_kv_blocks, blocksize_k, self.config.dim // self.config.n_heads, dtype=self.dtype, device=device),
+                torch.empty(num_kv_blocks, blocksize_k, self.config.dim // self.config.n_heads, dtype=self.dtype, device=device),
             )
             for _ in range(self.config.n_layers)
         ]
         kv_cache_ix = KVCacheIndexPaged(
-            num_kv_blocks, blocksize_k, self.config.n_kv_heads, self.config.n_layers, self.config.max_seq_len, max_batch_size, self.device
+            num_kv_blocks, blocksize_k, self.config.n_kv_heads, self.config.n_layers, self.config.max_seq_len, max_batch_size, device
         )
         # todo: does this make things better?
         for layer in kv_caches:

@@ -32,10 +32,10 @@ if __name__ == "__main__":
     parser.add_argument("--profile-only", action="store_true")
     args = parser.parse_args()
 
-    # model_str = "meta-llama/Llama-3.2-1B"
-    # dtype = torch.float16
-    model_str = "meta-llama/Llama-3.1-8B"
-    dtype = torch.bfloat16
+    model_str = "meta-llama/Llama-3.2-1B"
+    dtype = torch.float32
+    # model_str = "meta-llama/Llama-3.1-8B"
+    # dtype = torch.bfloat16
 
     device = "cuda"
     model, tokenizer = load_model(model_name=model_str, device=device, dtype=dtype)

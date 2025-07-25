@@ -4,7 +4,8 @@ import torch
 from transformers import AutoTokenizer  # type: ignore
 
 from serve.model import ModelArgs, LlamaModel
-from serve.hf_utils.convert_hf_checkpoint import main
+from serve.hf_utils.convert_hf_checkpoint import download_and_convert
+from serve.tp import apply_tp
 
 config_1b = {
     "dim": 2048,
@@ -36,29 +37,39 @@ name_to_config = {
 }
 
 
-def load_model(model_name, device, dtype):
+def load_model(model_name, device, dtype, tp_dim: int = 1):
     print(f"loading model {model_name}...")
     path = Path(f"checkpoints/{model_name}/model.pth")
     if not path.exists():
         # raise FileNotFoundError(f"Model checkpoint not found at {path}")
         print("model not found, converting from hf")
-        main(model_name)
+        from torch import distributed as dist
+        if dist.is_initialized():
+            if dist.get_rank() == 0:
+                download_and_convert(model_name)
+            dist.barrier()
+        else:
+            download_and_convert(model_name)
     config = name_to_config[model_name]
-    model = _load_model(config, path, device, dtype)
+    model = _load_model(config, path, device, dtype, tp_dim)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     print("Model finished loading")
     return model, tokenizer
 
 
-def _load_model(config, checkpoint_path, device, dtype):
+def _load_model(config, checkpoint_path, device, dtype, tp_dim: int = 1):
     with torch.device("meta"):
         config = ModelArgs(**config)
         model = LlamaModel(config, dtype=dtype)
 
     checkpoint = torch.load(str(checkpoint_path), mmap=True, weights_only=True)
     model.load_state_dict(checkpoint, assign=True)
+    if tp_dim > 1:
+        apply_tp(model)
 
     model = model.to(device=device, dtype=dtype)
+
     model.compute_freqs_cis()
 
+    print(f"rank: {torch.distributed.get_rank()}; mem: {torch.cuda.memory_allocated()/1e9:.2f}")
     return model.eval()

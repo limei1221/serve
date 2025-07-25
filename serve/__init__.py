@@ -1,8 +1,8 @@
 import os
 
 os.environ["DEVICE"] = "cuda"
-os.environ["COMPILE_DECODE"] = "1"
-os.environ["COMPILE_PREFILL"] = "1"
+os.environ["COMPILE_DECODE"] = "0"
+os.environ["COMPILE_PREFILL"] = "0"
 
 # optional torch config
 # import torch

@@ -360,13 +360,12 @@ def attn_decode_triton(
     # todo: fix num_splits > 1
     num_splits = 1
 
-    B, _, SEQLEN_Q, D = q.shape
+    B, Hq, SEQLEN_Q, D = q.shape
     assert SEQLEN_Q == 1
     q = q.squeeze(-2)
-    Hq = model_config.n_heads
-    Hk = model_config.n_kv_heads
+    HEAD_GROUP_SIZE = model_config.n_heads // model_config.n_kv_heads
+    Hk = Hq // HEAD_GROUP_SIZE
 
-    HEAD_GROUP_SIZE = Hq // Hk
     PADDED_HEAD_GROUP_SIZE = max(16, HEAD_GROUP_SIZE)  # need >= 16 to use tl.dot / tensor cores
 
     BLOCK_DMODEL = D
