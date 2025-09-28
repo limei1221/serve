@@ -168,7 +168,8 @@ def decode_one_token(
     kv_cache_ix: KVCacheIndexPaged,
     temperature: float,
 ):
-    DEVICE = model.device
+    # DEVICE = model.device
+    DEVICE = f"cuda:{torch.distributed.get_rank()}" if torch.distributed.is_initialized() else "cuda"
     req_lens = [r.input_length + len(r.generated_tokens) for r in requests]
     req_ids = [r.request_id for r in requests]
 

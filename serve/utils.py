@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import torch
+from torch import distributed as dist
 from transformers import AutoTokenizer  # type: ignore
 
 from serve.model import ModelArgs, LlamaModel
@@ -69,7 +70,9 @@ def _load_model(config, checkpoint_path, device, dtype, tp_dim: int = 1):
 
     model = model.to(device=device, dtype=dtype)
 
-    model.compute_freqs_cis()
+    model.compute_freqs_cis(device)
 
-    print(f"rank: {torch.distributed.get_rank()}; mem: {torch.cuda.memory_allocated()/1e9:.2f}")
+    if torch.cuda.is_available():
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        print(f"rank: {rank}; mem: {torch.cuda.memory_allocated()/1e9:.2f}")
     return model.eval()

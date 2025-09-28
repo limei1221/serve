@@ -160,14 +160,14 @@ class LlamaModel(nn.Module):
         self.dtype = dtype
         self.kv_caches_init = False
 
-    def compute_freqs_cis(self):
+    def compute_freqs_cis(self, device: str):
         self.freqs_cis = precompute_freqs_cis(
             self.config.max_seq_len, self.config.dim // self.config.n_heads, base=self.config.rope_base, rope_scaling=self.config.rope_scaling
-        ).to(self.device)
+        ).to(device)
 
     def create_kv_cache(self, blocksize_k: int, max_batch_size: int, device: str):
         available_memory = torch.cuda.mem_get_info()[0]
-        block_size_memory = 2 * 2 * self.config.n_layers * blocksize_k * (self.config.dim // self.config.n_heads)
+        block_size_memory = 2 * self.config.n_layers * blocksize_k * (self.config.dim // self.config.n_heads) * self.dtype.itemsize
         # todo: improve this heuristic
         num_kv_blocks = int((available_memory * 0.6) // block_size_memory)
         print(f"KV cache using {block_size_memory * num_kv_blocks / 1024**3:.2f}GB")
